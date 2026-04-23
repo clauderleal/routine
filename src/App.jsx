@@ -698,6 +698,173 @@ function Goals({ goals, saveGoals }) {
   )
 }
 
+// ── STATS ─────────────────────────────────────────────────────
+function Stats({ habits, completions }) {
+  const today = new Date()
+
+  // Build 90-day heatmap data
+  const heatmap = Array.from({ length: 91 }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - 90 + i)
+    const ds = d.toISOString().split('T')[0]
+    const scheduled = habits.filter(h => isScheduledOn(h, d))
+    const done = (completions[ds] || []).filter(id => scheduled.find(h => h.id === id)).length
+    return { ds, pct: scheduled.length === 0 ? -1 : done / scheduled.length, isToday: ds === todayStr(), dayIdx: d.getDay() }
+  })
+
+  // Monthly scores
+  const months = {}
+  heatmap.forEach(({ ds, pct }) => {
+    if (pct < 0) return
+    const mon = ds.slice(0, 7)
+    if (!months[mon]) months[mon] = { total: 0, count: 0 }
+    months[mon].total += pct; months[mon].count++
+  })
+  const monthList = Object.entries(months).sort((a,b) => b[0].localeCompare(a[0])).slice(0, 4)
+
+  // Per-habit stats (last 30 days)
+  const habitStats = habits.map(h => {
+    let scheduled = 0, done = 0, streak = getStreak(h, completions), bestStreak = 0, cur = 0
+    for (let i = 0; i < 90; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i)
+      const ds = d.toISOString().split('T')[0]
+      if (!isScheduledOn(h, d)) continue
+      if (i < 30) { scheduled++; if ((completions[ds]||[]).includes(h.id)) done++ }
+      if ((completions[ds]||[]).includes(h.id)) { cur++; bestStreak = Math.max(bestStreak, cur) } else cur = 0
+    }
+    return { ...h, pct: scheduled === 0 ? 0 : Math.round((done/scheduled)*100), streak, bestStreak, scheduled }
+  }).sort((a,b) => b.pct - a.pct)
+
+  // Overall 30-day score
+  let tot30 = 0, done30 = 0
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(); d.setDate(d.getDate() - i)
+    const ds = d.toISOString().split('T')[0]
+    const sch = habits.filter(h => isScheduledOn(h, d))
+    tot30 += sch.length
+    done30 += (completions[ds]||[]).filter(id => sch.find(h => h.id===id)).length
+  }
+  const score30 = tot30 === 0 ? 0 : Math.round((done30/tot30)*100)
+
+  const heatColor = (pct) => {
+    if (pct < 0) return C.bg
+    if (pct === 0) return C.border
+    if (pct < 0.5) return '#FBE9E0'
+    if (pct < 1) return '#F0A07A'
+    return C.accent
+  }
+
+  const fmtMonth = (ym) => {
+    const [y, m] = ym.split('-')
+    return new Date(+y, +m-1, 1).toLocaleDateString('en-AU', { month:'long', year:'numeric' })
+  }
+
+  if (habits.length === 0) return <Empty icon="◑" l1="No habits yet" l2="Add habits first to see your stats." />
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
+
+      {/* 30-day summary cards */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px' }}>
+        {[
+          ['30-day score', `${score30}%`, score30 >= 80 ? C.green : score30 >= 50 ? C.accent : C.red],
+          ['Habits', habits.length, C.textHi],
+          ['Best streak', `${Math.max(0,...habitStats.map(h=>h.bestStreak))}d`, C.yellow],
+        ].map(([label, value, color]) => (
+          <div key={label} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:'12px', padding:'14px 12px', textAlign:'center' }}>
+            <p style={{ fontFamily:"'Lora',serif", fontSize:'22px', fontWeight:700, color, lineHeight:1 }}>{value}</p>
+            <p style={{ fontSize:'10px', color:C.textLo, marginTop:'5px', fontWeight:600 }}>{label.toUpperCase()}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Heatmap */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:'14px', padding:'18px' }}>
+        <Label>Last 90 days</Label>
+        {/* Day labels */}
+        <div style={{ display:'flex', gap:'3px', marginBottom:'4px', paddingLeft:'28px' }}>
+          {['S','M','T','W','T','F','S'].map((d,i) => (
+            <div key={i} style={{ width:'12px', textAlign:'center', fontSize:'8px', color:C.textLo }}>{d}</div>
+          ))}
+        </div>
+        {/* Grid — group by week */}
+        <div style={{ display:'flex', gap:'3px' }}>
+          {Array.from({ length: Math.ceil(heatmap.length / 7) }, (_, wi) => (
+            <div key={wi} style={{ display:'flex', flexDirection:'column', gap:'3px' }}>
+              {heatmap.slice(wi*7, wi*7+7).map(({ ds, pct, isToday }) => (
+                <div key={ds} title={ds}
+                  style={{ width:'12px', height:'12px', borderRadius:'3px', background:heatColor(pct), border:isToday?`1.5px solid ${C.accent}`:'1.5px solid transparent', flexShrink:0 }} />
+              ))}
+            </div>
+          ))}
+        </div>
+        {/* Legend */}
+        <div style={{ display:'flex', alignItems:'center', gap:'6px', marginTop:'12px' }}>
+          <p style={{ fontSize:'10px', color:C.textLo }}>Less</p>
+          {[C.border, '#FBE9E0', '#F0A07A', C.accent].map(c => (
+            <div key={c} style={{ width:'12px', height:'12px', borderRadius:'3px', background:c }} />
+          ))}
+          <p style={{ fontSize:'10px', color:C.textLo }}>More</p>
+        </div>
+      </div>
+
+      {/* Monthly scores */}
+      {monthList.length > 0 && (
+        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:'14px', padding:'18px' }}>
+          <Label>Monthly breakdown</Label>
+          <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
+            {monthList.map(([ym, { total, count }]) => {
+              const pct = Math.round((total/count)*100)
+              const color = pct >= 80 ? C.green : pct >= 50 ? C.accent : C.red
+              return (
+                <div key={ym}>
+                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
+                    <p style={{ fontSize:'13px', fontWeight:600, color:C.textHi }}>{fmtMonth(ym)}</p>
+                    <p style={{ fontSize:'13px', fontWeight:700, color }}>{pct}%</p>
+                  </div>
+                  <ProgressBar pct={pct} color={color} h={6} />
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Per-habit breakdown */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:'14px', padding:'18px' }}>
+        <Label>Habit performance — last 30 days</Label>
+        <div style={{ display:'flex', flexDirection:'column', gap:'14px' }}>
+          {habitStats.map(h => {
+            const cat = CAT_COLORS[h.category] || { fg:C.accent, bg:C.accentLt }
+            const color = h.pct >= 80 ? C.green : h.pct >= 50 ? C.accent : C.red
+            return (
+              <div key={h.id}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'7px' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                    <span style={{ fontSize:'16px' }}>{h.emoji}</span>
+                    <div>
+                      <p style={{ fontSize:'13px', fontWeight:600, color:C.textHi, lineHeight:1.2 }}>{h.name}</p>
+                      <p style={{ fontSize:'10px', color:C.textLo, marginTop:'2px' }}>{h.scheduled === 0 ? 'Not scheduled yet' : `${h.scheduled} sessions scheduled`}</p>
+                    </div>
+                  </div>
+                  <div style={{ textAlign:'right', flexShrink:0 }}>
+                    <p style={{ fontSize:'14px', fontWeight:700, color }}>{h.pct}%</p>
+                    {h.streak > 0 && <p style={{ fontSize:'10px', color:h.streak>=7?C.yellow:C.textLo, marginTop:'2px' }}>{h.streak>=7?'🔥 ':''}{h.streak}d streak</p>}
+                  </div>
+                </div>
+                <ProgressBar pct={h.pct} color={color} h={5} />
+                {h.bestStreak > 0 && (
+                  <p style={{ fontSize:'10px', color:C.textLo, marginTop:'5px' }}>Best streak: {h.bestStreak} days</p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+    </div>
+  )
+}
+
 // ── ROOT APP ──────────────────────────────────────────────────
 export default function App({ session }) {
   const [tab, setTab] = useState('today')
@@ -717,7 +884,9 @@ export default function App({ session }) {
       if (h) setHabits(h); if (c) setCompletions(c); if (b) setBooks(b); if (g) setGoals(g); if (id) setIdentity(id)
       if (jIdx?.length) {
         const entries = await Promise.all(jIdx.map(d => sGet(JOURNAL_KEY(d))))
-        const map = {}; jIdx.forEach((d,i) => { if(entries[i]) map[d]=entries[i] }); setJournals(map)
+        const map = {}
+        jIdx.forEach((d,i) => { if (entries[i]) map[d] = entries[i] })
+        setJournals(map)
       }
       setReady(true)
     })()
@@ -728,9 +897,12 @@ export default function App({ session }) {
   const saveBooks = async u => { setBooks(u); await sSet(K.books,u) }
   const saveGoals = async u => { setGoals(u); await sSet(K.goals,u) }
   const saveJournal = async (date, entry) => {
-    const updated = { ...journals, [date]:entry }; setJournals(updated)
     await sSet(JOURNAL_KEY(date), entry)
-    await sSet(JOURNAL_IDX, Object.keys(updated).sort((a,b)=>b.localeCompare(a)))
+    setJournals(prev => {
+      const updated = { ...prev, [date]: entry }
+      sSet(JOURNAL_IDX, Object.keys(updated).sort((a,b) => b.localeCompare(a)))
+      return updated
+    })
   }
 
   const todayHabits = habits.filter(h => isScheduledOn(h, new Date()))
@@ -740,6 +912,7 @@ export default function App({ session }) {
   const TABS = [
     { id:'today',   label:'Today',   icon:'◑' },
     { id:'habits',  label:'Habits',  icon:'◉' },
+    { id:'stats',   label:'Stats',   icon:'▦' },
     { id:'journal', label:'Journal', icon:'✦' },
     { id:'books',   label:'Books',   icon:'◧' },
     { id:'goals',   label:'Goals',   icon:'◎' },
@@ -786,6 +959,7 @@ export default function App({ session }) {
       <div style={{ padding:'20px', maxWidth:'540px', margin:'0 auto' }} key={tab} className="fade-in">
         {tab==='today'   && <Today   habits={habits} completions={completions} saveCompletions={saveCompletions} identity={identity} setIdentityRaw={setIdentity} />}
         {tab==='habits'  && <Habits  habits={habits} completions={completions} saveHabits={saveHabits} />}
+        {tab==='stats'   && <Stats   habits={habits} completions={completions} />}
         {tab==='journal' && <Journal journals={journals} saveJournal={saveJournal} />}
         {tab==='books'   && <Books   books={books}   saveBooks={saveBooks} />}
         {tab==='goals'   && <Goals   goals={goals}   saveGoals={saveGoals} />}
